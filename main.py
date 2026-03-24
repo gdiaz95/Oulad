@@ -15,6 +15,7 @@ from sklearn.model_selection import train_test_split
 from source.metrics import (
     evaluate_and_save_reports,
     get_metrics,
+    run_bivariate_distribution_tests,
     run_tstr_evaluation,
     run_univariate_hypothesis_tests,
 )
@@ -60,6 +61,15 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.05,
         help="Significance level for univariate hypothesis tests.",
+    )
+    parser.add_argument(
+        "--critical-pair",
+        action="append",
+        default=[],
+        help=(
+            "Business-critical pair to track in bivariate tests, format 'column_a:column_b'. "
+            "Repeat the flag to pass multiple pairs."
+        ),
     )
     return parser.parse_args()
 
@@ -127,6 +137,28 @@ def main() -> None:
         synthetic_data=synthetic_data,
         alpha=args.alpha,
     )
+    parsed_critical_pairs = []
+    for raw_pair in args.critical_pair:
+        if ":" not in raw_pair:
+            raise ValueError(
+                f"Invalid --critical-pair value '{raw_pair}'. Expected format 'column_a:column_b'."
+            )
+        left, right = [value.strip() for value in raw_pair.split(":", maxsplit=1)]
+        if not left or not right:
+            raise ValueError(
+                f"Invalid --critical-pair value '{raw_pair}'. Both column names are required."
+            )
+        parsed_critical_pairs.append((left, right))
+
+    if not parsed_critical_pairs and {"age_band", "final_result"}.issubset(real_data.columns):
+        parsed_critical_pairs.append(("age_band", "final_result"))
+
+    bivariate_distribution_tests = run_bivariate_distribution_tests(
+        real_data=real_data,
+        synthetic_data=synthetic_data,
+        alpha=args.alpha,
+        critical_pairs=parsed_critical_pairs,
+    )
 
     metadata = SingleTableMetadata()
     metadata.detect_from_dataframe(data=real_data)
@@ -141,6 +173,7 @@ def main() -> None:
         metrics_qa=metrics_qa,
         tstr_results=tstr_results,
         univariate_hypothesis_tests=univariate_hypothesis_tests,
+        bivariate_distribution_tests=bivariate_distribution_tests,
     )
 
     print(f"Generated synthetic data at: {synth_path}")
