@@ -428,23 +428,16 @@ class NPGC:
                 if edges[0] == edges[-1]:
                     u[mask] = rng.random(valid.size)
                     return np.clip(u, 1e-12, 1 - 1e-12)
-                noisy_counts = np.maximum(counts + rng.laplace(0, 1/epsilon, size=100), 0.0)
+                noisy_counts = np.maximum(counts + rng.laplace(0, 1 / epsilon, size=100), 0.0)
                 total = noisy_counts.sum()
 
                 if total <= 0:
                     # extremely unlikely, but avoids divide-by-zero; keeps U valid
                     u[mask] = rng.random(valid.size)
                 else:
-                    p = noisy_counts / total                  # bin probabilities
-                    P = np.cumsum(p)                          # right CDF at each bin
-                    L = np.insert(P[:-1], 0, 0.0)             # left CDF at each bin
-
-                    # which bin each value falls into
-                    bin_idx = np.searchsorted(edges, valid, side="right") - 1
-                    bin_idx = np.clip(bin_idx, 0, len(p) - 1)
-
-                    # randomized PIT inside the bin mass
-                    u[mask] = L[bin_idx] + rng.random(valid.size) * p[bin_idx]
+                    # Interpolate directly over noisy cumulative curve.
+                    cdf = np.insert(np.cumsum(noisy_counts) / total, 0, 0.0)
+                    u[mask] = np.interp(valid, edges, cdf)
                 if epsilon is not None and epsilon > 0 and epsilon < 0.01:
                     print(f"NPGC DEBUG: Raw counts sum: {counts.sum()}")
                     print(f"NPGC DEBUG: Noisy counts sum: {noisy_counts.sum()}")
