@@ -1,0 +1,9 @@
+# Ignore everything
+*
+
+# Allow folders (so structure is kept)
+!*/
+
+# Keep this file
+!.gitignore
+!.gitkeep
