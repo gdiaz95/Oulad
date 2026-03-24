@@ -305,7 +305,7 @@ class NPGC:
             except Exception as e:
                 LOGGER.warning(f"Could not cast column '{col}': {e}")
 
-        return synthetic_data,z_correlated
+        return synthetic_data
 
     # ============================================================
     # Math Helper Methods

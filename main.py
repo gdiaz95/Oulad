@@ -10,30 +10,18 @@ import pandas as pd
 
 from source.npgc import NPGC
 
-DEFAULT_INPUT_CANDIDATES = [
-    Path("data/pre_processed/studentcs.csv"),
-    Path("data/pre_processed/students.csv"),
-]
-DEFAULT_OUTPUT = Path("data/post_procesed/students.csv")
+DEFAULT_INPUT = Path("data/pre_processed/students.csv")
+DEFAULT_OUTPUT = Path("data/post_processed/students.csv")
 
 
 def resolve_input_path(input_path: str | None) -> Path:
-    """Resolve input path from CLI value or from default candidates."""
-    if input_path:
-        path = Path(input_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Input file not found: {path}")
-        return path
-
-    for candidate in DEFAULT_INPUT_CANDIDATES:
-        if candidate.exists():
-            return candidate
-
-    candidates = ", ".join(str(path) for path in DEFAULT_INPUT_CANDIDATES)
-    raise FileNotFoundError(
-        "No input dataset found. Checked: "
-        f"{candidates}. Use --input to provide a path."
-    )
+    """Resolve input path from CLI value or the default pre-processed dataset."""
+    path = Path(input_path) if input_path else DEFAULT_INPUT
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Input file not found: {path}. Use --input to provide a valid path."
+        )
+    return path
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,8 +31,9 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument(
-        "n_samples",
+        "--n_samples",
         type=int,
+        default=10_000,
         help="Number of synthetic samples to generate.",
     )
     parser.add_argument(
@@ -52,15 +41,14 @@ def parse_args() -> argparse.Namespace:
         dest="input_path",
         default=None,
         help=(
-            "Optional path to the input CSV. If omitted, the script checks "
-            "data/pre_processed/studentcs.csv then data/pre_processed/students.csv."
+            "Optional path to the input CSV (default: data/pre_processed/students.csv)."
         ),
     )
     parser.add_argument(
         "--output",
         dest="output_path",
         default=str(DEFAULT_OUTPUT),
-        help="Path to save synthetic CSV (default: data/post_procesed/students.csv).",
+        help="Path to save synthetic CSV (default: data/post_processed/students.csv).",
     )
     return parser.parse_args()
 
