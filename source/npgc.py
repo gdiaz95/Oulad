@@ -24,9 +24,15 @@ LOGGER = logging.getLogger(__name__)
 class NPGC:
     """Non-parametric Gaussian copula synthesizer for tabular data."""
 
-    def __init__(self, enforce_min_max_values: bool = True, epsilon: float | None = 1.0) -> None:
+    def __init__(
+        self,
+        enforce_min_max_values: bool = True,
+        epsilon: float | None = 1.0,
+        dp_resample_numeric_anchors: bool = False,
+    ) -> None:
         self.enforce_min_max_values = enforce_min_max_values
         self.epsilon = epsilon
+        self.dp_resample_numeric_anchors = dp_resample_numeric_anchors
         self._model_state = {}
         self._fitted = False
         
@@ -141,11 +147,16 @@ class NPGC:
             if pd.api.types.is_numeric_dtype(dtype):
                 is_integer = np.allclose(valid_data % 1, 0) if len(valid_data) > 0 else False
 
-                # --- NEW: if DP, store DP-resampled sorted_values; else store raw sorted_values ---
+                # Optionally store DP-resampled sorted_values; otherwise store raw sorted_values.
                 n_valid = len(valid_data)
                 vals = valid_data.values.astype(float)
 
-                if eps_marginal is not None and eps_marginal > 0 and n_valid > 0:
+                if (
+                    self.dp_resample_numeric_anchors
+                    and eps_marginal is not None
+                    and eps_marginal > 0
+                    and n_valid > 0
+                ):
                     if is_integer:
                         # DP integer anchors via noisy counts on unique support
                         uniques, counts = np.unique(vals, return_counts=True)
