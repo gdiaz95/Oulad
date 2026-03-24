@@ -331,13 +331,14 @@ def run_bivariate_distribution_tests(
                 else abs(cramers_real - cramers_synth)
             )
 
-            expected = real_prob.ravel() * synth_total
-            observed = synth_table.to_numpy().ravel()
-            valid_mask = expected > 0
+            flat_real = real_table.to_numpy().ravel()
+            flat_synth = synth_table.to_numpy().ravel()
+            valid_mask = (flat_real + flat_synth) > 0
             if valid_mask.any():
-                chi_result = stats.chisquare(f_obs=observed[valid_mask], f_exp=expected[valid_mask])
-                p_value = float(chi_result.pvalue)
-                statistic = float(chi_result.statistic)
+                contingency = np.vstack([flat_real[valid_mask], flat_synth[valid_mask]])
+                chi2_stat, p_value, _, _ = stats.chi2_contingency(contingency, correction=False)
+                statistic = float(chi2_stat)
+                p_value = float(p_value)
             else:
                 p_value = None
                 statistic = None
