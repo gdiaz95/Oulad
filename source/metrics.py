@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from mostlyai import qa
 from sdv.evaluation.single_table import evaluate_quality, run_diagnostic
+from scipy import stats
 from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
@@ -115,6 +116,102 @@ def run_tstr_evaluation(
     return score_real, score_synthetic, performance_gap_pct
 
 
+def run_univariate_hypothesis_tests(
+    real_data: pd.DataFrame,
+    synthetic_data: pd.DataFrame,
+    alpha: float = 0.05,
+) -> dict:
+    """Run per-column statistical hypothesis tests between real and synthetic data."""
+    shared_columns = [c for c in real_data.columns if c in synthetic_data.columns]
+    per_column_results = []
+
+    for column in shared_columns:
+        real_col = real_data[column]
+        synthetic_col = synthetic_data[column]
+
+        if pd.api.types.is_numeric_dtype(real_col):
+            real_values = real_col.dropna().to_numpy()
+            synthetic_values = synthetic_col.dropna().to_numpy()
+
+            if len(real_values) < 2 or len(synthetic_values) < 2:
+                per_column_results.append(
+                    {
+                        "column": column,
+                        "column_type": "numeric",
+                        "test_name": "ks_2samp",
+                        "p_value": None,
+                        "statistic": None,
+                        "reject_null": None,
+                        "conclusion": "insufficient_data",
+                    }
+                )
+                continue
+
+            ks_result = stats.ks_2samp(real_values, synthetic_values)
+            reject = bool(ks_result.pvalue < alpha)
+            per_column_results.append(
+                {
+                    "column": column,
+                    "column_type": "numeric",
+                    "test_name": "ks_2samp",
+                    "p_value": float(ks_result.pvalue),
+                    "statistic": float(ks_result.statistic),
+                    "reject_null": reject,
+                    "conclusion": "different_distribution" if reject else "no_significant_difference",
+                }
+            )
+        else:
+            real_counts = real_col.astype("string").fillna("<NA>").value_counts()
+            synthetic_counts = synthetic_col.astype("string").fillna("<NA>").value_counts()
+            category_index = real_counts.index.union(synthetic_counts.index)
+            contingency = np.vstack(
+                [
+                    real_counts.reindex(category_index, fill_value=0).to_numpy(),
+                    synthetic_counts.reindex(category_index, fill_value=0).to_numpy(),
+                ]
+            )
+
+            if contingency.shape[1] < 2:
+                per_column_results.append(
+                    {
+                        "column": column,
+                        "column_type": "categorical",
+                        "test_name": "chi2_contingency",
+                        "p_value": 1.0,
+                        "statistic": 0.0,
+                        "reject_null": False,
+                        "conclusion": "no_significant_difference",
+                    }
+                )
+                continue
+
+            chi2_stat, p_value, _, _ = stats.chi2_contingency(contingency, correction=False)
+            reject = bool(p_value < alpha)
+            per_column_results.append(
+                {
+                    "column": column,
+                    "column_type": "categorical",
+                    "test_name": "chi2_contingency",
+                    "p_value": float(p_value),
+                    "statistic": float(chi2_stat),
+                    "reject_null": reject,
+                    "conclusion": "different_distribution" if reject else "no_significant_difference",
+                }
+            )
+
+    valid_tests = [item for item in per_column_results if item["reject_null"] is not None]
+    rejected_count = sum(item["reject_null"] for item in valid_tests)
+
+    return {
+        "alpha": alpha,
+        "n_columns_compared": len(shared_columns),
+        "n_valid_tests": len(valid_tests),
+        "n_rejected": int(rejected_count),
+        "rejection_rate": (rejected_count / len(valid_tests)) if valid_tests else None,
+        "columns": per_column_results,
+    }
+
+
 def evaluate_and_save_reports(
     original_real_data: pd.DataFrame,
     synthetic_data: pd.DataFrame,
@@ -122,6 +219,7 @@ def evaluate_and_save_reports(
     report_path: Path,
     metrics_qa,
     tstr_results: dict,
+    univariate_hypothesis_tests: dict,
 ):
     """Generate SDV + Mostly AI reports and save JSON report."""
     diagnostic_report = run_diagnostic(original_real_data, synthetic_data, metadata)
@@ -146,6 +244,7 @@ def evaluate_and_save_reports(
             "dcr_share": metrics_qa.distances.dcr_share,
         },
         "tstr_evaluation": tstr_results,
+        "univariate_hypothesis_tests": univariate_hypothesis_tests,
     }
 
     os.makedirs(report_path.parent, exist_ok=True)
