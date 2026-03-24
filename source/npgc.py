@@ -28,7 +28,7 @@ class NPGC:
         self,
         enforce_min_max_values: bool = True,
         epsilon: float | None = 1.0,
-        dp_resample_numeric_anchors: bool = False,
+        dp_resample_numeric_anchors: bool = True,
     ) -> None:
         self.enforce_min_max_values = enforce_min_max_values
         self.epsilon = epsilon
