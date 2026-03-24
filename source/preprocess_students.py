@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Build the OULAD students dataset by joining student tables.
 
-This script joins ``studentInfo.csv`` and ``studentRegistration.csv`` on
-``id_student``, drops the join key from the resulting dataset, and writes the
-combined records to ``data/pre_processed/students.csv`` by default.
+The OULAD student tables are keyed by the enrollment-level identifiers
+``code_module``, ``code_presentation``, and ``id_student``. Joining only on
+``id_student`` can create a many-to-many expansion for students who appear in
+multiple module presentations, so this script joins on the full shared key,
+drops ``id_student`` from the resulting dataset, and writes the combined
+records to ``data/pre_processed/students.csv`` by default.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import pandas as pd
 DEFAULT_STUDENT_INFO = Path("data/raw/studentInfo.csv")
 DEFAULT_STUDENT_REGISTRATION = Path("data/raw/studentRegistration.csv")
 DEFAULT_OUTPUT = Path("data/pre_processed/students.csv")
+JOIN_COLUMNS = ["code_module", "code_presentation", "id_student"]
 
 
 def build_students_dataset(
@@ -38,7 +42,20 @@ def build_students_dataset(
     student_info = pd.read_csv(student_info_path)
     student_registration = pd.read_csv(student_registration_path)
 
-    students = student_info.merge(student_registration, on="id_student", how="inner")
+    for name, dataframe in {
+        "studentInfo": student_info,
+        "studentRegistration": student_registration,
+    }.items():
+        missing_columns = [column for column in JOIN_COLUMNS if column not in dataframe.columns]
+        if missing_columns:
+            raise KeyError(f"{name} is missing required join column(s): {missing_columns}")
+
+    students = student_info.merge(
+        student_registration,
+        on=JOIN_COLUMNS,
+        how="inner",
+        validate="one_to_one",
+    )
     students = students.drop(columns=["id_student"])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
