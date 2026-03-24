@@ -12,7 +12,12 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
-from source.metrics import evaluate_and_save_reports, get_metrics, run_tstr_evaluation
+from source.metrics import (
+    evaluate_and_save_reports,
+    get_metrics,
+    run_tstr_evaluation,
+    run_univariate_hypothesis_tests,
+)
 from source.npgc import NPGC
 
 DEFAULT_REAL = Path("data/pre_processed/students.csv")
@@ -50,6 +55,12 @@ def parse_args() -> argparse.Namespace:
         help="Synthetic sample count (default: number of rows in real data).",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.05,
+        help="Significance level for univariate hypothesis tests.",
+    )
     return parser.parse_args()
 
 
@@ -111,6 +122,11 @@ def main() -> None:
         "synthetic_model_score": score_synthetic,
         "performance_gap_pct": performance_gap_pct,
     }
+    univariate_hypothesis_tests = run_univariate_hypothesis_tests(
+        real_data=real_data,
+        synthetic_data=synthetic_data,
+        alpha=args.alpha,
+    )
 
     metadata = SingleTableMetadata()
     metadata.detect_from_dataframe(data=real_data)
@@ -124,6 +140,7 @@ def main() -> None:
         report_path=report_path,
         metrics_qa=metrics_qa,
         tstr_results=tstr_results,
+        univariate_hypothesis_tests=univariate_hypothesis_tests,
     )
 
     print(f"Generated synthetic data at: {synth_path}")
