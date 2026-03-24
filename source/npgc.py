@@ -239,7 +239,13 @@ class NPGC:
                     "dtype_name": str(dtype),
                 }
 
-                u = self._empirical_cdf_categorical(series, sorted_labels, rng, epsilon=eps_marginal)
+                u = self._empirical_cdf_categorical(
+                    series,
+                    sorted_labels,
+                    counts_in_order,
+                    nan_frac,
+                    rng,
+                )
 
             z_df[col] = self._uniform_to_gaussian(u)
             
@@ -461,8 +467,9 @@ class NPGC:
         self,
         column: pd.Series,
         sorted_labels: list[Any],
+        counts: np.ndarray,
+        nan_frac: float,
         rng: np.random.Generator,
-        epsilon: float | None = 1.0,
     ) -> np.ndarray:
         """
         Categorical ECDF that is consistent with _inverse_ecdf_categorical:
@@ -477,44 +484,27 @@ class NPGC:
         n = arr.shape[0]
 
         u = np.full(n, np.nan, dtype=float)
-        nan_frac = float(np.mean(is_nan))  # same as series.isna().mean()
-
-        # If everything is NaN, map all to the top mass
-        if np.all(is_nan):
-            return np.clip(u, 1e-12, 1 - 1e-12)
 
         # ---- non-missing part ----
         vals = arr[~is_nan]
-        if vals.size == 0:
-            return np.clip(u, 1e-12, 1 - 1e-12)
+        if vals.size > 0:
+            u[~is_nan] = 0.5 * max(1.0 - nan_frac, 0.0)
+            counts = np.asarray(counts, dtype=float)
+            total = counts.sum()
+            if total > 0 and len(sorted_labels) > 0:
+                p = counts / total
+                P = np.cumsum(p)
+                L = np.insert(P[:-1], 0, 0.0)
 
-        # counts aligned with sorted_labels (which already excludes NaN)
-        uniq, cnt = np.unique(vals, return_counts=True)
-        count_map = dict(zip(uniq, cnt))
-        counts = np.array([count_map.get(l, 0) for l in sorted_labels], dtype=float)
-
-        # DP noise on category counts (if epsilon enabled)
-        if epsilon is not None and epsilon > 0:
-            noise = rng.laplace(0, 1.0 / epsilon, size=len(counts))
-            counts = np.maximum(counts + noise, 1e-5)
-
-        # convert to probabilities over the NON-MISSING support
-        total = counts.sum()
-        if total <= 0:
-            p = np.ones_like(counts) / len(counts)
-        else:
-            p = counts / total
-
-        P = np.cumsum(p)
-        L = np.insert(P[:-1], 0, 0.0)
-
-        # map each observed value to its interval [L_i, L_i+p_i)
-        idx_map = {lab: i for i, lab in enumerate(sorted_labels)}
-        indices = np.array([idx_map[v] for v in vals], dtype=int)
-
-        u_nonmiss_unit = L[indices] + rng.random(vals.size) * p[indices]  # in [0,1)
-        # scale into [0, 1 - nan_frac)
-        u[~is_nan] = u_nonmiss_unit * max(1.0 - nan_frac, 0.0)
+                idx_map = {lab: i for i, lab in enumerate(sorted_labels)}
+                indices = np.array([idx_map.get(v, -1) for v in vals], dtype=int)
+                known = indices >= 0
+                if np.any(known):
+                    idx = indices[known]
+                    u_nonmiss_unit = L[idx] + rng.random(idx.size) * p[idx]
+                    u_nonmiss = np.full(vals.shape, 0.5)
+                    u_nonmiss[known] = u_nonmiss_unit
+                    u[~is_nan] = u_nonmiss * max(1.0 - nan_frac, 0.0)
 
         # ---- missing part ----
         if nan_frac > 0:
