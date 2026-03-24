@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--n-samples",
         type=int,
-        default=None,
+        default=20_000,
         help="Synthetic sample count (default: number of rows in real data).",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
