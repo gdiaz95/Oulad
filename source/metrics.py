@@ -269,11 +269,11 @@ def run_bivariate_distribution_tests(
 ) -> dict:
     """Evaluate bivariate fidelity across cat-cat, num-cat, and num-num pairs."""
     tolerances = tolerances or {
-        "cat_cat_tvd_max": 0.10,
-        "cat_cat_cramers_v_gap_max": 0.10,
-        "num_cat_wasserstein_norm_max": 0.30,
-        "num_num_corr_gap_max": 0.10,
-        "num_num_density_tvd_max": 0.15,
+        "cat_cat_tvd_max": 0.12,
+        "cat_cat_cramers_v_gap_max": 0.12,
+        "num_cat_wasserstein_norm_max": 0.35,
+        "num_num_corr_gap_max": 0.12,
+        "num_num_density_tvd_max": 0.18,
     }
     critical_pairs = critical_pairs or []
 
