@@ -110,11 +110,11 @@ def run_tstr_evaluation(
     score_synthetic = metric_func(y_real_test, preds_synthetic)
 
     if score_real == 0:
-        performance_gap_pct = float("inf") if score_synthetic != 0 else 0.0
+        performance_drop = float("inf") if score_synthetic != 0 else 0.0
     else:
-        performance_gap_pct = ((score_real - score_synthetic) / score_real) * 100
+        performance_drop = ((score_real - score_synthetic)) * 100
 
-    return score_real, score_synthetic, performance_gap_pct
+    return score_real, score_synthetic, performance_drop
 
 
 def run_univariate_hypothesis_tests(

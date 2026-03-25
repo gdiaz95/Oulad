@@ -115,7 +115,7 @@ def main() -> None:
     metrics_qa = get_metrics(real_train, synthetic_data, real_holdout)
 
     model = RandomForestClassifier(n_estimators=200, random_state=args.seed)
-    score_real, score_synthetic, performance_gap_pct = run_tstr_evaluation(
+    score_real, score_synthetic, performance_drop = run_tstr_evaluation(
         real_data=real_data,
         synthetic_data=synthetic_data,
         target_column=args.target,
@@ -130,7 +130,7 @@ def main() -> None:
         "metric": "accuracy",
         "real_model_score": score_real,
         "synthetic_model_score": score_synthetic,
-        "performance_gap_pct": performance_gap_pct,
+        "performance_drop": performance_drop,
     }
     univariate_hypothesis_tests = run_univariate_hypothesis_tests(
         real_data=real_data,
