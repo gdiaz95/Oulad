@@ -626,8 +626,15 @@ def _build_binary_outcome_flags(
     if pd.api.types.is_numeric_dtype(outcome_series):
         return outcome_series > 0
 
+    binary_levels = (
+        outcome_series.dropna().astype("string").str.strip().sort_values().unique().tolist()
+    )
+    if len(binary_levels) == 2:
+        return outcome_series.astype("string").str.strip() == binary_levels[-1]
+
     raise ValueError(
-        "Outcome is non-numeric. Provide at least one --conclusion-positive-outcome label."
+        "Outcome is non-numeric with more than two levels. "
+        "Provide --conclusion-positive-outcome labels."
     )
 
 
@@ -807,6 +814,77 @@ def run_conclusion_consistency_test(
             "effect_size_within_tolerance": effect_within_tolerance,
             "consistent_conclusion": bool(consistent_conclusion),
         },
+    }
+
+
+def run_conclusion_consistency_for_all_pairs(
+    real_data: pd.DataFrame,
+    synthetic_data: pd.DataFrame,
+    alpha: float = 0.05,
+    effect_size_tolerance: float = 0.20,
+    positive_outcomes_by_column: dict[str, list[str]] | None = None,
+) -> dict:
+    """
+    Run conclusion consistency tests for all valid predictor/outcome pairs.
+
+    A valid predictor must be binary in the real dataset. Outcomes can be numeric,
+    binary categorical, or categorical with explicit `positive_outcomes_by_column`.
+    """
+    positive_outcomes_by_column = positive_outcomes_by_column or {}
+
+    shared_columns = [c for c in real_data.columns if c in synthetic_data.columns]
+    pair_results = []
+    skipped_pairs = []
+
+    for predictor_column in shared_columns:
+        predictor_levels = (
+            real_data[predictor_column].dropna().astype("string").sort_values().unique().tolist()
+        )
+        if len(predictor_levels) != 2:
+            continue
+
+        for outcome_column in shared_columns:
+            if outcome_column == predictor_column:
+                continue
+
+            positive_outcomes = positive_outcomes_by_column.get(outcome_column)
+            try:
+                result = run_conclusion_consistency_test(
+                    real_data=real_data,
+                    synthetic_data=synthetic_data,
+                    predictor_column=predictor_column,
+                    outcome_column=outcome_column,
+                    positive_outcomes=positive_outcomes,
+                    alpha=alpha,
+                    effect_size_tolerance=effect_size_tolerance,
+                )
+                pair_results.append(result)
+            except (KeyError, ValueError) as exc:
+                skipped_pairs.append(
+                    {
+                        "predictor_column": predictor_column,
+                        "outcome_column": outcome_column,
+                        "reason": str(exc),
+                    }
+                )
+
+    consistent_count = sum(
+        1
+        for item in pair_results
+        if item.get("comparison", {}).get("consistent_conclusion") is True
+    )
+
+    return {
+        "alpha": alpha,
+        "effect_size_tolerance": effect_size_tolerance,
+        "n_pairs_tested": len(pair_results),
+        "n_pairs_skipped": len(skipped_pairs),
+        "consistent_pairs": consistent_count,
+        "percent_consistent_pairs": (
+            (consistent_count / len(pair_results)) * 100 if pair_results else None
+        ),
+        "pairs": pair_results,
+        "skipped_pairs": skipped_pairs,
     }
 
 

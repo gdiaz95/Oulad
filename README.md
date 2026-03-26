@@ -19,27 +19,26 @@ the result, and writes the output to `data/pre_processed/students.csv`.
 Joining only on `id_student` can incorrectly expand the dataset when a student
 appears in multiple module presentations.
 
-## Conclusion consistency test (real vs synthetic)
+## Conclusion consistency tests (real vs synthetic)
 
-`main.py` now includes a direct inferential comparison test to answer questions like:
+`main.py` includes direct inferential comparison tests to answer questions like:
 "Does gender affect course success in the same way on real and synthetic data?"
 
-By default, it runs a **Fisher exact test** for:
-- predictor: `gender`
-- outcome: `final_result`, collapsed to a positive class of `Pass` + `Distinction`
+It now runs a **Fisher exact test** for **all valid predictor/outcome pairs** where:
+- predictor has exactly two levels in the real data
+- outcome is numeric, binary categorical, or a categorical column with explicit positive labels
 
 and compares real vs synthetic conclusions using:
 - same effect sign
 - same significance decision
 - effect size (log-odds-ratio) within a relative tolerance
 
-Example:
+You can still provide positive labels for a specific outcome (for example, `final_result`):
 
 ```bash
 .venv/bin/python main.py \
   --real data/pre_processed/students.csv \
   --synth data/post_processed/students.csv \
-  --conclusion-predictor gender \
   --conclusion-outcome final_result \
   --conclusion-positive-outcome Pass \
   --conclusion-positive-outcome Distinction
