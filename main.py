@@ -16,7 +16,7 @@ from source.metrics import (
     evaluate_and_save_reports,
     get_metrics,
     run_bivariate_distribution_tests,
-    run_conclusion_consistency_test,
+    run_conclusion_consistency_for_all_pairs,
     run_tstr_evaluation,
     run_univariate_hypothesis_tests,
 )
@@ -185,14 +185,14 @@ def main() -> None:
         alpha=args.alpha,
         critical_pairs=parsed_critical_pairs,
     )
-    conclusion_consistency_test = run_conclusion_consistency_test(
+    conclusion_consistency_test = run_conclusion_consistency_for_all_pairs(
         real_data=real_data,
         synthetic_data=synthetic_data,
-        predictor_column=args.conclusion_predictor,
-        outcome_column=args.conclusion_outcome,
-        positive_outcomes=args.conclusion_positive_outcome,
         alpha=args.alpha,
         effect_size_tolerance=args.effect_size_tolerance,
+        positive_outcomes_by_column={
+            args.conclusion_outcome: args.conclusion_positive_outcome
+        },
     )
 
     metadata = SingleTableMetadata()
