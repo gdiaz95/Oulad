@@ -829,6 +829,7 @@ def run_conclusion_consistency_for_all_pairs(
     shared_columns = [c for c in real_data.columns if c in synthetic_data.columns]
     pair_results = []
     skipped_pairs = []
+    pair_candidates = []
 
     def _dependency_result_for_dataset(data: pd.DataFrame, left: str, right: str, alpha_value: float) -> dict:
         left_series = data[left]
@@ -848,6 +849,9 @@ def run_conclusion_consistency_for_all_pairs(
                     "pair_type": pair_type,
                     "test_name": "chi2_independence",
                     "p_value": None,
+                    "p_value_fdr_bh": None,
+                    "reject_null_raw": None,
+                    "reject_null_fdr": None,
                     "dependency_detected": None,
                     "effect_size": None,
                     "effect_direction": "not_applicable",
@@ -861,10 +865,13 @@ def run_conclusion_consistency_for_all_pairs(
                 "test_name": "chi2_independence",
                 "statistic": float(chi2_stat),
                 "p_value": float(p_value),
-                "dependency_detected": bool(p_value < alpha_value),
+                "p_value_fdr_bh": None,
+                "reject_null_raw": bool(p_value < alpha_value),
+                "reject_null_fdr": None,
+                "dependency_detected": None,
                 "effect_size": _safe_float(cramers_v),
                 "effect_direction": "not_applicable",
-                "conclusion": "dependent" if p_value < alpha_value else "independent",
+                "conclusion": "dependent_raw" if p_value < alpha_value else "independent_raw",
             }
 
         if left_cat ^ right_cat:
@@ -879,6 +886,9 @@ def run_conclusion_consistency_for_all_pairs(
                     "numeric_column": numeric_col,
                     "categorical_column": categorical_col,
                     "p_value": None,
+                    "p_value_fdr_bh": None,
+                    "reject_null_raw": None,
+                    "reject_null_fdr": None,
                     "dependency_detected": None,
                     "effect_size": None,
                     "effect_direction": "not_applicable",
@@ -897,6 +907,9 @@ def run_conclusion_consistency_for_all_pairs(
                     "numeric_column": numeric_col,
                     "categorical_column": categorical_col,
                     "p_value": None,
+                    "p_value_fdr_bh": None,
+                    "reject_null_raw": None,
+                    "reject_null_fdr": None,
                     "dependency_detected": None,
                     "effect_size": None,
                     "effect_direction": "not_applicable",
@@ -918,10 +931,13 @@ def run_conclusion_consistency_for_all_pairs(
                 "categorical_column": categorical_col,
                 "statistic": float(h_stat),
                 "p_value": float(p_value),
-                "dependency_detected": bool(p_value < alpha_value),
+                "p_value_fdr_bh": None,
+                "reject_null_raw": bool(p_value < alpha_value),
+                "reject_null_fdr": None,
+                "dependency_detected": None,
                 "effect_size": _safe_float(eta_sq),
                 "effect_direction": "not_applicable",
-                "conclusion": "dependent" if p_value < alpha_value else "independent",
+                "conclusion": "dependent_raw" if p_value < alpha_value else "independent_raw",
             }
 
         pair_type = "num_num"
@@ -931,6 +947,9 @@ def run_conclusion_consistency_for_all_pairs(
                 "pair_type": pair_type,
                 "test_name": "spearman_correlation",
                 "p_value": None,
+                "p_value_fdr_bh": None,
+                "reject_null_raw": None,
+                "reject_null_fdr": None,
                 "dependency_detected": None,
                 "effect_size": None,
                 "effect_direction": "insufficient_data",
@@ -952,15 +971,49 @@ def run_conclusion_consistency_for_all_pairs(
             "test_name": "spearman_correlation",
             "statistic": _safe_float(corr),
             "p_value": _safe_float(p_value),
-            "dependency_detected": bool(p_value < alpha_value) if p_value is not None else None,
+            "p_value_fdr_bh": None,
+            "reject_null_raw": bool(p_value < alpha_value) if p_value is not None else None,
+            "reject_null_fdr": None,
+            "dependency_detected": None,
             "effect_size": _safe_float(corr),
             "effect_direction": direction,
-            "conclusion": "dependent" if p_value is not None and p_value < alpha_value else "independent",
+            "conclusion": (
+                "dependent_raw"
+                if p_value is not None and p_value < alpha_value
+                else "independent_raw"
+            ),
         }
 
     for left, right in combinations(shared_columns, 2):
         real_result = _dependency_result_for_dataset(real_data, left, right, alpha)
         synth_result = _dependency_result_for_dataset(synthetic_data, left, right, alpha)
+        pair_candidates.append((left, right, real_result, synth_result))
+
+    real_p_values = [candidate[2]["p_value"] for candidate in pair_candidates]
+    synth_p_values = [candidate[3]["p_value"] for candidate in pair_candidates]
+    real_adj_p_values = _bh_adjust(real_p_values)
+    synth_adj_p_values = _bh_adjust(synth_p_values)
+
+    for idx, (left, right, real_result, synth_result) in enumerate(pair_candidates):
+        real_result["p_value_fdr_bh"] = real_adj_p_values[idx]
+        synth_result["p_value_fdr_bh"] = synth_adj_p_values[idx]
+
+        if real_result["p_value"] is not None:
+            real_result["reject_null_fdr"] = bool(
+                real_result["p_value_fdr_bh"] is not None and real_result["p_value_fdr_bh"] < alpha
+            )
+            real_result["dependency_detected"] = real_result["reject_null_fdr"]
+            real_result["conclusion"] = (
+                "dependent" if real_result["reject_null_fdr"] else "independent"
+            )
+        if synth_result["p_value"] is not None:
+            synth_result["reject_null_fdr"] = bool(
+                synth_result["p_value_fdr_bh"] is not None and synth_result["p_value_fdr_bh"] < alpha
+            )
+            synth_result["dependency_detected"] = synth_result["reject_null_fdr"]
+            synth_result["conclusion"] = (
+                "dependent" if synth_result["reject_null_fdr"] else "independent"
+            )
 
         if real_result["dependency_detected"] is None or synth_result["dependency_detected"] is None:
             skipped_pairs.append(
@@ -975,11 +1028,22 @@ def run_conclusion_consistency_for_all_pairs(
         same_dependency_conclusion = (
             real_result["dependency_detected"] == synth_result["dependency_detected"]
         )
-        same_effect_direction = (
-            real_result["effect_direction"] == synth_result["effect_direction"]
-            if real_result["pair_type"] == "num_num"
-            else True
-        )
+        if real_result["pair_type"] == "num_num":
+            if (
+                real_result["effect_direction"] == "insufficient_data"
+                or synth_result["effect_direction"] == "insufficient_data"
+            ):
+                skipped_pairs.append(
+                    {
+                        "pair": [left, right],
+                        "pair_type": real_result["pair_type"],
+                        "reason": "insufficient_effect_direction_for_num_num_pair",
+                    }
+                )
+                continue
+            same_effect_direction = real_result["effect_direction"] == synth_result["effect_direction"]
+        else:
+            same_effect_direction = True
 
         pair_results.append(
             {
@@ -990,7 +1054,7 @@ def run_conclusion_consistency_for_all_pairs(
                 "real_dataset_result": real_result,
                 "synthetic_dataset_result": synth_result,
                 "comparison": {
-                    "same_dependency_conclusion": bool(same_dependency_conclusion),
+                    "same_significance_after_fdr": bool(same_dependency_conclusion),
                     "same_effect_direction": bool(same_effect_direction),
                     "consistent_conclusion": bool(
                         same_dependency_conclusion
@@ -1008,6 +1072,7 @@ def run_conclusion_consistency_for_all_pairs(
 
     return {
         "alpha": alpha,
+        "multiple_testing_correction": "benjamini-hochberg_fdr_by_dataset",
         "n_pairs_tested": len(pair_results),
         "n_pairs_skipped": len(skipped_pairs),
         "consistent_pairs": consistent_count,
