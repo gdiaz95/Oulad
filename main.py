@@ -91,12 +91,6 @@ def parse_args() -> argparse.Namespace:
             "Repeat flag for multiple labels."
         ),
     )
-    parser.add_argument(
-        "--effect-size-tolerance",
-        type=float,
-        default=0.20,
-        help="Relative tolerance for effect-size consistency (default: 0.20).",
-    )
     return parser.parse_args()
 
 
@@ -189,7 +183,6 @@ def main() -> None:
         real_data=real_data,
         synthetic_data=synthetic_data,
         alpha=args.alpha,
-        effect_size_tolerance=args.effect_size_tolerance,
         positive_outcomes_by_column={
             args.conclusion_outcome: args.conclusion_positive_outcome
         },

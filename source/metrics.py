@@ -821,7 +821,6 @@ def run_conclusion_consistency_for_all_pairs(
     real_data: pd.DataFrame,
     synthetic_data: pd.DataFrame,
     alpha: float = 0.05,
-    effect_size_tolerance: float = 0.20,
     positive_outcomes_by_column: dict[str, list[str]] | None = None,
 ) -> dict:
     """Run dependency conclusion consistency for all shared column pairs."""
@@ -982,37 +981,20 @@ def run_conclusion_consistency_for_all_pairs(
             else True
         )
 
-        real_effect = real_result.get("effect_size")
-        synth_effect = synth_result.get("effect_size")
-        effect_size_gap = (
-            abs(float(real_effect) - float(synth_effect))
-            if real_effect is not None and synth_effect is not None
-            else None
-        )
-        effect_within_tolerance = (
-            bool(effect_size_gap <= effect_size_tolerance)
-            if effect_size_gap is not None
-            else None
-        )
-
         pair_results.append(
             {
                 "test_name": "pairwise_dependency_conclusion_consistency",
                 "pair": [left, right],
                 "pair_type": real_result["pair_type"],
                 "alpha": alpha,
-                "effect_size_tolerance": effect_size_tolerance,
                 "real_dataset_result": real_result,
                 "synthetic_dataset_result": synth_result,
                 "comparison": {
                     "same_dependency_conclusion": bool(same_dependency_conclusion),
                     "same_effect_direction": bool(same_effect_direction),
-                    "effect_size_gap": _safe_float(effect_size_gap),
-                    "effect_size_within_tolerance": effect_within_tolerance,
                     "consistent_conclusion": bool(
                         same_dependency_conclusion
                         and same_effect_direction
-                        and (effect_within_tolerance is True if effect_within_tolerance is not None else False)
                     ),
                 },
             }
@@ -1026,7 +1008,6 @@ def run_conclusion_consistency_for_all_pairs(
 
     return {
         "alpha": alpha,
-        "effect_size_tolerance": effect_size_tolerance,
         "n_pairs_tested": len(pair_results),
         "n_pairs_skipped": len(skipped_pairs),
         "consistent_pairs": consistent_count,
