@@ -824,49 +824,199 @@ def run_conclusion_consistency_for_all_pairs(
     effect_size_tolerance: float = 0.20,
     positive_outcomes_by_column: dict[str, list[str]] | None = None,
 ) -> dict:
-    """
-    Run conclusion consistency tests for all valid predictor/outcome pairs.
-
-    A valid predictor must be binary in the real dataset. Outcomes can be numeric,
-    binary categorical, or categorical with explicit `positive_outcomes_by_column`.
-    """
+    """Run dependency conclusion consistency for all shared column pairs."""
     positive_outcomes_by_column = positive_outcomes_by_column or {}
 
     shared_columns = [c for c in real_data.columns if c in synthetic_data.columns]
     pair_results = []
     skipped_pairs = []
 
-    for predictor_column in shared_columns:
-        predictor_levels = (
-            real_data[predictor_column].dropna().astype("string").sort_values().unique().tolist()
-        )
-        if len(predictor_levels) != 2:
+    def _dependency_result_for_dataset(data: pd.DataFrame, left: str, right: str, alpha_value: float) -> dict:
+        left_series = data[left]
+        right_series = data[right]
+        left_cat = _is_categorical(left_series)
+        right_cat = _is_categorical(right_series)
+
+        if left_cat and right_cat:
+            pair_type = "cat_cat"
+            table = pd.crosstab(
+                left_series.astype("string").fillna("<NA>"),
+                right_series.astype("string").fillna("<NA>"),
+                dropna=False,
+            )
+            if table.shape[0] < 2 or table.shape[1] < 2:
+                return {
+                    "pair_type": pair_type,
+                    "test_name": "chi2_independence",
+                    "p_value": None,
+                    "dependency_detected": None,
+                    "effect_size": None,
+                    "effect_direction": "not_applicable",
+                    "conclusion": "insufficient_data",
+                }
+
+            chi2_stat, p_value, _, _ = stats.chi2_contingency(table.to_numpy(), correction=False)
+            cramers_v = _cramers_v_from_table(table)
+            return {
+                "pair_type": pair_type,
+                "test_name": "chi2_independence",
+                "statistic": float(chi2_stat),
+                "p_value": float(p_value),
+                "dependency_detected": bool(p_value < alpha_value),
+                "effect_size": _safe_float(cramers_v),
+                "effect_direction": "not_applicable",
+                "conclusion": "dependent" if p_value < alpha_value else "independent",
+            }
+
+        if left_cat ^ right_cat:
+            pair_type = "num_cat"
+            numeric_col = right if left_cat else left
+            categorical_col = left if left_cat else right
+            subset = data[[numeric_col, categorical_col]].dropna()
+            if subset.empty:
+                return {
+                    "pair_type": pair_type,
+                    "test_name": "kruskal_wallis",
+                    "numeric_column": numeric_col,
+                    "categorical_column": categorical_col,
+                    "p_value": None,
+                    "dependency_detected": None,
+                    "effect_size": None,
+                    "effect_direction": "not_applicable",
+                    "conclusion": "insufficient_data",
+                }
+
+            groups = [
+                grp[numeric_col].to_numpy()
+                for _, grp in subset.groupby(categorical_col, dropna=False)
+                if len(grp) > 0
+            ]
+            if len(groups) < 2:
+                return {
+                    "pair_type": pair_type,
+                    "test_name": "kruskal_wallis",
+                    "numeric_column": numeric_col,
+                    "categorical_column": categorical_col,
+                    "p_value": None,
+                    "dependency_detected": None,
+                    "effect_size": None,
+                    "effect_direction": "not_applicable",
+                    "conclusion": "insufficient_data",
+                }
+
+            h_stat, p_value = stats.kruskal(*groups)
+            n_obs = int(len(subset))
+            n_groups = len(groups)
+            eta_sq = (
+                max((h_stat - n_groups + 1) / (n_obs - n_groups), 0.0)
+                if n_obs > n_groups
+                else None
+            )
+            return {
+                "pair_type": pair_type,
+                "test_name": "kruskal_wallis",
+                "numeric_column": numeric_col,
+                "categorical_column": categorical_col,
+                "statistic": float(h_stat),
+                "p_value": float(p_value),
+                "dependency_detected": bool(p_value < alpha_value),
+                "effect_size": _safe_float(eta_sq),
+                "effect_direction": "not_applicable",
+                "conclusion": "dependent" if p_value < alpha_value else "independent",
+            }
+
+        pair_type = "num_num"
+        subset = data[[left, right]].dropna()
+        if len(subset) < 3:
+            return {
+                "pair_type": pair_type,
+                "test_name": "spearman_correlation",
+                "p_value": None,
+                "dependency_detected": None,
+                "effect_size": None,
+                "effect_direction": "insufficient_data",
+                "conclusion": "insufficient_data",
+            }
+
+        corr, p_value = stats.spearmanr(subset[left], subset[right], nan_policy="omit")
+        if pd.isna(corr):
+            direction = "neutral"
+        elif corr > 0:
+            direction = "positive"
+        elif corr < 0:
+            direction = "negative"
+        else:
+            direction = "neutral"
+
+        return {
+            "pair_type": pair_type,
+            "test_name": "spearman_correlation",
+            "statistic": _safe_float(corr),
+            "p_value": _safe_float(p_value),
+            "dependency_detected": bool(p_value < alpha_value) if p_value is not None else None,
+            "effect_size": _safe_float(corr),
+            "effect_direction": direction,
+            "conclusion": "dependent" if p_value is not None and p_value < alpha_value else "independent",
+        }
+
+    for left, right in combinations(shared_columns, 2):
+        real_result = _dependency_result_for_dataset(real_data, left, right, alpha)
+        synth_result = _dependency_result_for_dataset(synthetic_data, left, right, alpha)
+
+        if real_result["dependency_detected"] is None or synth_result["dependency_detected"] is None:
+            skipped_pairs.append(
+                {
+                    "pair": [left, right],
+                    "pair_type": real_result.get("pair_type") or synth_result.get("pair_type"),
+                    "reason": "insufficient_data_in_real_or_synthetic",
+                }
+            )
             continue
 
-        for outcome_column in shared_columns:
-            if outcome_column == predictor_column:
-                continue
+        same_dependency_conclusion = (
+            real_result["dependency_detected"] == synth_result["dependency_detected"]
+        )
+        same_effect_direction = (
+            real_result["effect_direction"] == synth_result["effect_direction"]
+            if real_result["pair_type"] == "num_num"
+            else True
+        )
 
-            positive_outcomes = positive_outcomes_by_column.get(outcome_column)
-            try:
-                result = run_conclusion_consistency_test(
-                    real_data=real_data,
-                    synthetic_data=synthetic_data,
-                    predictor_column=predictor_column,
-                    outcome_column=outcome_column,
-                    positive_outcomes=positive_outcomes,
-                    alpha=alpha,
-                    effect_size_tolerance=effect_size_tolerance,
-                )
-                pair_results.append(result)
-            except (KeyError, ValueError) as exc:
-                skipped_pairs.append(
-                    {
-                        "predictor_column": predictor_column,
-                        "outcome_column": outcome_column,
-                        "reason": str(exc),
-                    }
-                )
+        real_effect = real_result.get("effect_size")
+        synth_effect = synth_result.get("effect_size")
+        effect_size_gap = (
+            abs(float(real_effect) - float(synth_effect))
+            if real_effect is not None and synth_effect is not None
+            else None
+        )
+        effect_within_tolerance = (
+            bool(effect_size_gap <= effect_size_tolerance)
+            if effect_size_gap is not None
+            else None
+        )
+
+        pair_results.append(
+            {
+                "test_name": "pairwise_dependency_conclusion_consistency",
+                "pair": [left, right],
+                "pair_type": real_result["pair_type"],
+                "alpha": alpha,
+                "effect_size_tolerance": effect_size_tolerance,
+                "real_dataset_result": real_result,
+                "synthetic_dataset_result": synth_result,
+                "comparison": {
+                    "same_dependency_conclusion": bool(same_dependency_conclusion),
+                    "same_effect_direction": bool(same_effect_direction),
+                    "effect_size_gap": _safe_float(effect_size_gap),
+                    "effect_size_within_tolerance": effect_within_tolerance,
+                    "consistent_conclusion": bool(
+                        same_dependency_conclusion
+                        and same_effect_direction
+                        and (effect_within_tolerance is True if effect_within_tolerance is not None else False)
+                    ),
+                },
+            }
+        )
 
     consistent_count = sum(
         1
