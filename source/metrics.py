@@ -614,6 +614,202 @@ def run_bivariate_distribution_tests(
     }
 
 
+def _build_binary_outcome_flags(
+    outcome_series: pd.Series,
+    positive_outcomes: list[str] | None,
+) -> pd.Series:
+    """Convert an outcome column into a binary success flag."""
+    if positive_outcomes:
+        normalized_positive = {str(value).strip().lower() for value in positive_outcomes}
+        return outcome_series.astype("string").str.strip().str.lower().isin(normalized_positive)
+
+    if pd.api.types.is_numeric_dtype(outcome_series):
+        return outcome_series > 0
+
+    raise ValueError(
+        "Outcome is non-numeric. Provide at least one --conclusion-positive-outcome label."
+    )
+
+
+def _single_dataset_binary_association(
+    data: pd.DataFrame,
+    predictor_column: str,
+    outcome_column: str,
+    baseline_group: str,
+    comparison_group: str,
+    positive_outcomes: list[str] | None,
+    alpha: float,
+) -> dict:
+    """Run Fisher's exact test for one dataset and compute effect/sign summaries."""
+    subset = data[[predictor_column, outcome_column]].dropna()
+    subset = subset[subset[predictor_column].astype("string").isin([baseline_group, comparison_group])]
+
+    predictor = subset[predictor_column].astype("string")
+    success = _build_binary_outcome_flags(subset[outcome_column], positive_outcomes)
+
+    baseline_mask = predictor == baseline_group
+    comparison_mask = predictor == comparison_group
+
+    baseline_success = int(success[baseline_mask].sum())
+    baseline_total = int(baseline_mask.sum())
+    comparison_success = int(success[comparison_mask].sum())
+    comparison_total = int(comparison_mask.sum())
+
+    baseline_fail = baseline_total - baseline_success
+    comparison_fail = comparison_total - comparison_success
+
+    contingency = np.array(
+        [[baseline_success, baseline_fail], [comparison_success, comparison_fail]],
+        dtype=float,
+    )
+
+    if contingency.sum() == 0 or baseline_total == 0 or comparison_total == 0:
+        return {
+            "n_rows": int(len(subset)),
+            "p_value": None,
+            "reject_null": None,
+            "odds_ratio": None,
+            "log_odds_ratio": None,
+            "effect_sign": "insufficient_data",
+            "baseline_group": baseline_group,
+            "comparison_group": comparison_group,
+            "baseline_success_rate": None,
+            "comparison_success_rate": None,
+            "conclusion": "insufficient_data",
+        }
+
+    odds_ratio, p_value = stats.fisher_exact(contingency, alternative="two-sided")
+
+    # Haldane-Anscombe correction to avoid infinities in log-odds effect size.
+    adjusted = contingency + 0.5
+    adjusted_or = (adjusted[1, 0] * adjusted[0, 1]) / (adjusted[1, 1] * adjusted[0, 0])
+    log_odds_ratio = float(np.log(adjusted_or))
+
+    if log_odds_ratio > 0:
+        effect_sign = "positive"
+    elif log_odds_ratio < 0:
+        effect_sign = "negative"
+    else:
+        effect_sign = "neutral"
+
+    reject = bool(p_value < alpha)
+
+    return {
+        "n_rows": int(len(subset)),
+        "p_value": float(p_value),
+        "reject_null": reject,
+        "odds_ratio": float(odds_ratio),
+        "log_odds_ratio": log_odds_ratio,
+        "effect_sign": effect_sign,
+        "baseline_group": baseline_group,
+        "comparison_group": comparison_group,
+        "baseline_success_rate": float(baseline_success / baseline_total),
+        "comparison_success_rate": float(comparison_success / comparison_total),
+        "conclusion": "association_detected" if reject else "no_significant_association",
+    }
+
+
+def run_conclusion_consistency_test(
+    real_data: pd.DataFrame,
+    synthetic_data: pd.DataFrame,
+    predictor_column: str,
+    outcome_column: str,
+    positive_outcomes: list[str] | None = None,
+    alpha: float = 0.05,
+    effect_size_tolerance: float = 0.20,
+) -> dict:
+    """
+    Compare inferential conclusions between real and synthetic data.
+
+    The test used for each dataset is Fisher's exact test on:
+      predictor (binary categorical) x binary(success) outcome.
+    Effect size is log-odds-ratio (comparison group vs baseline group).
+    """
+    if predictor_column not in real_data.columns or outcome_column not in real_data.columns:
+        raise KeyError(
+            f"Columns '{predictor_column}' and/or '{outcome_column}' are missing in real data."
+        )
+    if predictor_column not in synthetic_data.columns or outcome_column not in synthetic_data.columns:
+        raise KeyError(
+            f"Columns '{predictor_column}' and/or '{outcome_column}' are missing in synthetic data."
+        )
+
+    predictor_levels = (
+        real_data[predictor_column].dropna().astype("string").sort_values().unique().tolist()
+    )
+    if len(predictor_levels) != 2:
+        raise ValueError(
+            f"Predictor '{predictor_column}' must have exactly two levels in real data; "
+            f"found {len(predictor_levels)}."
+        )
+
+    baseline_group, comparison_group = predictor_levels
+    real_result = _single_dataset_binary_association(
+        data=real_data,
+        predictor_column=predictor_column,
+        outcome_column=outcome_column,
+        baseline_group=baseline_group,
+        comparison_group=comparison_group,
+        positive_outcomes=positive_outcomes,
+        alpha=alpha,
+    )
+    synthetic_result = _single_dataset_binary_association(
+        data=synthetic_data,
+        predictor_column=predictor_column,
+        outcome_column=outcome_column,
+        baseline_group=baseline_group,
+        comparison_group=comparison_group,
+        positive_outcomes=positive_outcomes,
+        alpha=alpha,
+    )
+
+    same_sign = (
+        real_result["effect_sign"] == synthetic_result["effect_sign"]
+        and real_result["effect_sign"] not in {"insufficient_data", "neutral"}
+    )
+    same_significance_decision = (
+        real_result["reject_null"] is not None
+        and synthetic_result["reject_null"] is not None
+        and real_result["reject_null"] == synthetic_result["reject_null"]
+    )
+
+    effect_within_tolerance = None
+    real_effect = real_result["log_odds_ratio"]
+    synth_effect = synthetic_result["log_odds_ratio"]
+    if real_effect is not None and synth_effect is not None:
+        denominator = max(abs(real_effect), 1e-9)
+        relative_gap = abs(synth_effect - real_effect) / denominator
+        effect_within_tolerance = bool(relative_gap <= effect_size_tolerance)
+
+    consistent_conclusion = (
+        bool(same_sign)
+        and bool(same_significance_decision)
+        and (effect_within_tolerance is True if effect_within_tolerance is not None else False)
+    )
+
+    return {
+        "test_name": "fisher_exact_binary_association",
+        "predictor_column": predictor_column,
+        "outcome_column": outcome_column,
+        "positive_outcomes": positive_outcomes or [">0 for numeric outcomes"],
+        "alpha": alpha,
+        "effect_size_tolerance": effect_size_tolerance,
+        "comparison_rule": {
+            "same_effect_sign": True,
+            "same_significance_decision": True,
+            "effect_size_within_tolerance": True,
+        },
+        "real_dataset_result": real_result,
+        "synthetic_dataset_result": synthetic_result,
+        "comparison": {
+            "same_effect_sign": bool(same_sign),
+            "same_significance_decision": bool(same_significance_decision),
+            "effect_size_within_tolerance": effect_within_tolerance,
+            "consistent_conclusion": bool(consistent_conclusion),
+        },
+    }
+
+
 def evaluate_and_save_reports(
     original_real_data: pd.DataFrame,
     synthetic_data: pd.DataFrame,
@@ -623,6 +819,7 @@ def evaluate_and_save_reports(
     tstr_results: dict,
     univariate_hypothesis_tests: dict,
     bivariate_distribution_tests: dict,
+    conclusion_consistency_test: dict | None = None,
 ):
     """Generate SDV + Mostly AI reports and save JSON report."""
     diagnostic_report = run_diagnostic(original_real_data, synthetic_data, metadata)
@@ -649,6 +846,7 @@ def evaluate_and_save_reports(
         "tstr_evaluation": tstr_results,
         "univariate_hypothesis_tests": univariate_hypothesis_tests,
         "bivariate_distribution_tests": bivariate_distribution_tests,
+        "conclusion_consistency_test": conclusion_consistency_test,
     }
 
     os.makedirs(report_path.parent, exist_ok=True)

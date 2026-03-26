@@ -16,6 +16,7 @@ from source.metrics import (
     evaluate_and_save_reports,
     get_metrics,
     run_bivariate_distribution_tests,
+    run_conclusion_consistency_test,
     run_tstr_evaluation,
     run_univariate_hypothesis_tests,
 )
@@ -70,6 +71,31 @@ def parse_args() -> argparse.Namespace:
             "Business-critical pair to track in bivariate tests, format 'column_a:column_b'. "
             "Repeat the flag to pass multiple pairs."
         ),
+    )
+    parser.add_argument(
+        "--conclusion-predictor",
+        default="gender",
+        help="Binary predictor column for conclusion consistency test.",
+    )
+    parser.add_argument(
+        "--conclusion-outcome",
+        default="final_result",
+        help="Outcome column for conclusion consistency test.",
+    )
+    parser.add_argument(
+        "--conclusion-positive-outcome",
+        action="append",
+        default=["Pass", "Distinction"],
+        help=(
+            "Outcome label treated as positive class for conclusion consistency test. "
+            "Repeat flag for multiple labels."
+        ),
+    )
+    parser.add_argument(
+        "--effect-size-tolerance",
+        type=float,
+        default=0.20,
+        help="Relative tolerance for effect-size consistency (default: 0.20).",
     )
     return parser.parse_args()
 
@@ -159,6 +185,15 @@ def main() -> None:
         alpha=args.alpha,
         critical_pairs=parsed_critical_pairs,
     )
+    conclusion_consistency_test = run_conclusion_consistency_test(
+        real_data=real_data,
+        synthetic_data=synthetic_data,
+        predictor_column=args.conclusion_predictor,
+        outcome_column=args.conclusion_outcome,
+        positive_outcomes=args.conclusion_positive_outcome,
+        alpha=args.alpha,
+        effect_size_tolerance=args.effect_size_tolerance,
+    )
 
     metadata = SingleTableMetadata()
     metadata.detect_from_dataframe(data=real_data)
@@ -174,6 +209,7 @@ def main() -> None:
         tstr_results=tstr_results,
         univariate_hypothesis_tests=univariate_hypothesis_tests,
         bivariate_distribution_tests=bivariate_distribution_tests,
+        conclusion_consistency_test=conclusion_consistency_test,
     )
 
     print(f"Generated synthetic data at: {synth_path}")
