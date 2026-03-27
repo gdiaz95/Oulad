@@ -1094,6 +1094,7 @@ def evaluate_and_save_reports(
     univariate_hypothesis_tests: dict,
     bivariate_distribution_tests: dict,
     conclusion_consistency_test: dict | None = None,
+    hypothesis_testing_summary: dict | None = None,
 ):
     """Generate SDV + Mostly AI reports and save JSON report."""
     diagnostic_report = run_diagnostic(original_real_data, synthetic_data, metadata)
@@ -1121,6 +1122,7 @@ def evaluate_and_save_reports(
         "univariate_hypothesis_tests": univariate_hypothesis_tests,
         "bivariate_distribution_tests": bivariate_distribution_tests,
         "conclusion_consistency_test": conclusion_consistency_test,
+        "hypothesis_testing_summary": hypothesis_testing_summary,
     }
 
     os.makedirs(report_path.parent, exist_ok=True)
@@ -1128,3 +1130,98 @@ def evaluate_and_save_reports(
         json.dump(combined_report_data, f, indent=4)
 
     return combined_report_data
+
+
+def _aggregate_scalar(values: list) -> dict | None:
+    """Aggregate numeric/bool scalar values into mean/std summaries."""
+    valid = [value for value in values if value is not None]
+    if not valid:
+        return None
+
+    if all(isinstance(value, (bool, np.bool_)) for value in valid):
+        numeric = np.array([float(value) for value in valid], dtype=float)
+        std = float(np.std(numeric, ddof=1)) if len(numeric) > 1 else 0.0
+        return {
+            "mean": float(np.mean(numeric)),
+            "std": std,
+            "n": int(len(numeric)),
+            "type": "probability",
+        }
+
+    if all(isinstance(value, (int, float, np.integer, np.floating)) for value in valid):
+        numeric = np.array(valid, dtype=float)
+        std = float(np.std(numeric, ddof=1)) if len(numeric) > 1 else 0.0
+        return {
+            "mean": float(np.mean(numeric)),
+            "std": std,
+            "n": int(len(numeric)),
+            "type": "numeric",
+        }
+
+    return None
+
+
+def _list_item_id(item: dict, index: int) -> str:
+    """Build a stable identifier for list item alignment across runs."""
+    if "pair_key" in item:
+        return f"pair_key:{item['pair_key']}"
+    if "column" in item:
+        return f"column:{item['column']}"
+    if "pair" in item:
+        return f"pair:{'__'.join(map(str, item['pair']))}"
+    return f"index:{index}"
+
+
+def _aggregate_nested(values: list):
+    """Recursively aggregate nested structures (dict/list/scalar)."""
+    scalar = _aggregate_scalar(values)
+    if scalar is not None:
+        return scalar
+
+    valid = [value for value in values if value is not None]
+    if not valid:
+        return None
+
+    if all(isinstance(value, dict) for value in valid):
+        keys = sorted({key for value in valid for key in value})
+        return {
+            key: _aggregate_nested([value.get(key) if isinstance(value, dict) else None for value in values])
+            for key in keys
+        }
+
+    if all(isinstance(value, list) for value in valid):
+        if all(all(isinstance(item, dict) for item in value) for value in valid):
+            grouped_items: dict[str, list] = {}
+            for run_list in values:
+                if run_list is None:
+                    continue
+                for index, item in enumerate(run_list):
+                    item_id = _list_item_id(item, index)
+                    grouped_items.setdefault(item_id, []).append(item)
+            return {
+                item_id: _aggregate_nested(item_values)
+                for item_id, item_values in grouped_items.items()
+            }
+
+        max_len = max(len(value) for value in valid)
+        return [
+            _aggregate_nested(
+                [
+                    value[index] if isinstance(value, list) and index < len(value) else None
+                    for value in values
+                ]
+            )
+            for index in range(max_len)
+        ]
+
+    return None
+
+
+def summarize_hypothesis_test_runs(hypothesis_runs: list[dict]) -> dict:
+    """
+    Summarize repeated hypothesis-testing outputs as mean/std across runs.
+
+    Numeric values are summarized as mean/std.
+    Boolean values are treated as Bernoulli probabilities and summarized similarly.
+    """
+    return _aggregate_nested(hypothesis_runs) or {}

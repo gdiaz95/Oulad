@@ -19,6 +19,7 @@ from source.metrics import (
     run_conclusion_consistency_for_all_pairs,
     run_tstr_evaluation,
     run_univariate_hypothesis_tests,
+    summarize_hypothesis_test_runs,
 )
 from source.npgc import NPGC
 
@@ -91,6 +92,12 @@ def parse_args() -> argparse.Namespace:
             "Repeat flag for multiple labels."
         ),
     )
+    parser.add_argument(
+        "--hypothesis-runs",
+        type=int,
+        default=50,
+        help="Number of synthetic draws used to summarize hypothesis-testing metrics.",
+    )
     return parser.parse_args()
 
 
@@ -152,11 +159,9 @@ def main() -> None:
         "synthetic_model_score": score_synthetic,
         "performance_drop": performance_drop,
     }
-    univariate_hypothesis_tests = run_univariate_hypothesis_tests(
-        real_data=real_data,
-        synthetic_data=synthetic_data,
-        alpha=args.alpha,
-    )
+    if args.hypothesis_runs <= 0:
+        raise ValueError("--hypothesis-runs must be a positive integer.")
+
     parsed_critical_pairs = []
     for raw_pair in args.critical_pair:
         if ":" not in raw_pair:
@@ -173,20 +178,40 @@ def main() -> None:
     if not parsed_critical_pairs and {"age_band", "final_result"}.issubset(real_data.columns):
         parsed_critical_pairs.append(("age_band", "final_result"))
 
-    bivariate_distribution_tests = run_bivariate_distribution_tests(
-        real_data=real_data,
-        synthetic_data=synthetic_data,
-        alpha=args.alpha,
-        critical_pairs=parsed_critical_pairs,
-    )
-    conclusion_consistency_test = run_conclusion_consistency_for_all_pairs(
-        real_data=real_data,
-        synthetic_data=synthetic_data,
-        alpha=args.alpha,
-        positive_outcomes_by_column={
-            args.conclusion_outcome: args.conclusion_positive_outcome
-        },
-    )
+    hypothesis_runs = []
+    for run_idx in range(args.hypothesis_runs):
+        run_synthetic = synthetic_data if run_idx == 0 else synthesizer.sample(
+            n_samples,
+            seed=args.seed + run_idx,
+        )
+        univariate_hypothesis_tests = run_univariate_hypothesis_tests(
+            real_data=real_data,
+            synthetic_data=run_synthetic,
+            alpha=args.alpha,
+        )
+        bivariate_distribution_tests = run_bivariate_distribution_tests(
+            real_data=real_data,
+            synthetic_data=run_synthetic,
+            alpha=args.alpha,
+            critical_pairs=parsed_critical_pairs,
+        )
+        conclusion_consistency_test = run_conclusion_consistency_for_all_pairs(
+            real_data=real_data,
+            synthetic_data=run_synthetic,
+            alpha=args.alpha,
+            positive_outcomes_by_column={
+                args.conclusion_outcome: args.conclusion_positive_outcome
+            },
+        )
+        hypothesis_runs.append(
+            {
+                "univariate_hypothesis_tests": univariate_hypothesis_tests,
+                "bivariate_distribution_tests": bivariate_distribution_tests,
+                "conclusion_consistency_test": conclusion_consistency_test,
+            }
+        )
+
+    hypothesis_testing_summary = summarize_hypothesis_test_runs(hypothesis_runs)
 
     metadata = SingleTableMetadata()
     metadata.detect_from_dataframe(data=real_data)
@@ -203,6 +228,7 @@ def main() -> None:
         univariate_hypothesis_tests=univariate_hypothesis_tests,
         bivariate_distribution_tests=bivariate_distribution_tests,
         conclusion_consistency_test=conclusion_consistency_test,
+        hypothesis_testing_summary=hypothesis_testing_summary,
     )
 
     print(f"Generated synthetic data at: {synth_path}")
